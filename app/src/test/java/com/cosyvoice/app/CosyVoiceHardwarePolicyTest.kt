@@ -7,7 +7,7 @@ import org.junit.Test
 class CosyVoiceHardwarePolicyTest {
 
     @Test
-    fun sm8850UsesOnlyVerifiedHexagonPlan() {
+    fun qualcommWithHexagonUsesHexagon() {
         val plan = CosyVoiceHardwarePolicy.recommend(capabilities("SM8850", hexagon = true))
 
         assertEquals("hexagon", plan.llmBackend)
@@ -17,11 +17,24 @@ class CosyVoiceHardwarePolicyTest {
     }
 
     @Test
-    fun unverifiedSnapdragonStaysOnCpuEvenWhenHexagonLoads() {
+    fun hexagonIsOpenedForAnyQualcommWhenLibraryLoads() {
         val plan = CosyVoiceHardwarePolicy.recommend(capabilities("SM8750", hexagon = true))
 
+        assertEquals("hexagon", plan.llmBackend)
+    }
+
+    @Test
+    fun qualcommWithoutHexagonLibraryStaysOnCpu() {
+        val plan = CosyVoiceHardwarePolicy.recommend(capabilities("SM8750", hexagon = false))
+
         assertEquals("cpu", plan.llmBackend)
-        assertTrue(plan.npuStatus.contains("未通过"))
+    }
+
+    @Test
+    fun nonQualcommNeverUsesHexagon() {
+        val plan = CosyVoiceHardwarePolicy.recommend(capabilities("MT6991", hexagon = true))
+
+        assertEquals("cpu", plan.llmBackend)
     }
 
     @Test

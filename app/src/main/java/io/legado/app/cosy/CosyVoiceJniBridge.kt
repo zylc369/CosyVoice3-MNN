@@ -73,3 +73,25 @@ internal object CosyVoiceEnrollmentNative {
         threads: Int
     ): Int
 }
+
+/**
+ * Hexagon DSP 架构版本查询（运行期，非写死型号）。
+ *
+ * 走 `libMNN_htpops.so` 的 `get_hex_arch_ver(cDSP domain, &arch)`。
+ * 库/符号缺失或查询失败时返回 null（回退 CPU），不会抛异常。
+ */
+internal object CosyVoiceHexagonNative {
+    private val available: Boolean by lazy {
+        try {
+            System.loadLibrary("cosy_hexagon_arch")
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private external fun arch(): Int
+
+    fun archVersion(): Int? =
+        if (available) runCatching { arch() }.getOrNull()?.takeIf { it >= 0 } else null
+}
