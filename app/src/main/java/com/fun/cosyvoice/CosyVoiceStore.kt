@@ -56,12 +56,9 @@ class CosyVoiceStore(context: Context) {
         // 逐文件校验当前只用包内 manifest.json 的**大小**（结构完整性），不做 SHA：
         // 包内清单与文件同包、可能过时，真正的可信锚是 CosyVoiceModelDownloader 里的整包 SHA-256。
         //
-        // 注意：llm_config.json **不在此列**。
-        // 它不是模型权重，而是"运行时配置"：MNN-LLM 的采样默认值是全关
-        // （top_k=-1 / top_p=-1 / repetition_penalty=-1），会让生成长度剧烈波动，
-        // 所以本项目必须在它里面写入官方 CosyVoice 的采样参数。
-        // 把它当模型文件校验大小/hash，会导致"修好采样反而判模型缺失"。
-        // 改由 ensureLlmSamplerConfig() 在运行时合并 —— 见下方。
+        // 这里是【就绪判定】的文件集：modelStatus() 只校验这些文件是否存在、大小是否匹配。
+        // 注意：llm_config.json 不在此列 —— 它导入时必须存在，但运行期会被改写大小，
+        // 放进这里会误判"模型缺失"。见下方 IMPORT_MODEL_FILES。
         val REQUIRED_MODEL_FILES = listOf(
             "config-cpu-cosyvoice-ras.json",
             "llm.mnn",
@@ -80,6 +77,16 @@ class CosyVoiceStore(context: Context) {
             "source-linear-weight.bin",
             "source-linear-bias.bin"
         )
+
+        // 【2026-10-10 修复】原生 LLM 必需 llm_config.json（libllm.so 内含
+        // "Unable to open llm_config file"）。它携带 Qwen2 结构与 jinja 聊天模板/eos；
+        // 缺失会让 LLM 生成空序列、质量门报"原始 Token 为空（JNI 退出码 7）"
+        // （docs/DEVELOPMENT_STORY.md #5：MNN LLM 输出全零）。
+        // 但它在运行时会被 ensureLlmSamplerConfig() 改写、大小变化，不能进入做大小校验的
+        // REQUIRED_MODEL_FILES，否则"修好采样反而判模型缺失"。
+        // 因此单列为：导入/导出/删除时必须存在，但不参与就绪判定。
+        private const val LLM_CONFIG_FILE = "llm_config.json"
+        val IMPORT_MODEL_FILES = REQUIRED_MODEL_FILES + LLM_CONFIG_FILE
 
         // 模型包自述清单：随 ZIP 一起分发/导出，逐文件记载大小与 SHA-256。
         private const val MANIFEST_FILE = "manifest.json"
@@ -141,15 +148,12 @@ class CosyVoiceStore(context: Context) {
      *
      * 幂等：已经含 repetition_penalty 就跳过，不重写文件（避免每次启动都改 mtime）。
      *
-     * ⚠️ 2026-09-18 NPU-R8：**本函数写入的采样参数对 LLM 无效。**
-     * C++ 侧只把 `CosyVoiceLlmNative.run(configPath=...)` 收到的那个文件交给
-     * `Llm::createLLM`，也就是 `config-<backend>-cosyvoice-ras-runtime.json`
-     * （由 [llmRuntimeConfig] 从模型文件 `config-cpu-cosyvoice-ras.json` 派生）。
-     * 仓库与构建机两侧的 C++ 运行时代码都不读 `llm_config.json` —— 它只被 Python 导出工具
-     * （`transformers/llm/export/...`）使用。真正生效的采样参数在 `llmRuntimeConfig` 里，
-     * 而它目前只覆盖 backend_type / thread_num / power（+ 两个受控标记）。
-     *
-     * 保留本函数只是为了不改动历史行为；**不要**再往这里加"应该生效"的参数。
+     * ⚠️ 2026-09-18 NPU-R8 曾断言「native 不读 llm_config.json」。**2026-10-10 更正：该断言错误。**
+     * 原生 LLM 确实会打开模型目录下的 llm_config.json（libllm.so 内含
+     * "Unable to open llm_config file:"），并用其中的 Qwen2 结构与 jinja 聊天模板/eos；
+     * 缺该文件会让 LLM 生成空序列（docs/DEVELOPMENT_STORY.md #5：MNN LLM 输出全零）。
+     * 所以该文件必须随模型安装（见 IMPORT_MODEL_FILES），本函数只是往上合并采样参数。
+     * 真正生效的采样参数另由 [llmRuntimeConfig] 写进 config-<backend>-...-runtime.json。
      */
     fun ensureLlmSamplerConfig() {
         val file = File(modelDir, "llm_config.json")
@@ -519,7 +523,7 @@ class CosyVoiceStore(context: Context) {
      */
     fun importModelZip(input: InputStream, onProgress: (String) -> Unit = {}) {
         val staging = File(root, "model-staging-${System.currentTimeMillis()}").apply { mkdirs() }
-        val required = REQUIRED_MODEL_FILES.toSet()
+        val required = IMPORT_MODEL_FILES.toSet()
         try {
             var manifestBytes: ByteArray? = null
             ZipInputStream(input.buffered()).use { zip ->
@@ -537,16 +541,16 @@ class CosyVoiceStore(context: Context) {
                     copyZipEntry(zip, target, MAX_MODEL_FILE_BYTES)
                 }
             }
-            val missing = REQUIRED_MODEL_FILES.filter { name ->
+            val missing = IMPORT_MODEL_FILES.filter { name ->
                 val staged = File(staging, name)
                 !staged.isFile || staged.length() == 0L
             }
             check(missing.isEmpty()) { "模型包缺少：${missing.joinToString()}" }
             manifestBytes?.let { bytes ->
                 val specs = parseModelManifest(bytes).associateBy { it.name }
-                val notListed = REQUIRED_MODEL_FILES.filterNot { it in specs }
+                val notListed = IMPORT_MODEL_FILES.filterNot { it in specs }
                 check(notListed.isEmpty()) { "模型清单缺少：${notListed.joinToString()}" }
-                REQUIRED_MODEL_FILES.forEach { name ->
+                IMPORT_MODEL_FILES.forEach { name ->
                     val spec = specs.getValue(name)
                     val staged = File(staging, name)
                     check(staged.length() == spec.bytes) {
@@ -554,7 +558,7 @@ class CosyVoiceStore(context: Context) {
                     }
                 }
             }
-            REQUIRED_MODEL_FILES.forEach { name ->
+            IMPORT_MODEL_FILES.forEach { name ->
                 val source = File(staging, name)
                 val temp = File(modelDir, "$name.importing")
                 source.copyTo(temp, overwrite = true)
@@ -576,14 +580,14 @@ class CosyVoiceStore(context: Context) {
         check(modelStatus().ready) { "MNN 模型不完整，无法导出" }
         val output = appContext.contentResolver.openOutputStream(uri, "w") ?: error("无法创建模型包")
         var exportedBytes = 0L
-        val totalBytes = REQUIRED_MODEL_FILES.sumOf { modelFile(it).length() }
+        val totalBytes = IMPORT_MODEL_FILES.sumOf { modelFile(it).length() }
         var lastProgress = -1L
         val specs = mutableListOf<CosyVoiceModelFileSpec>()
         try {
             ZipOutputStream(output.buffered(1024 * 1024)).use { zip ->
                 zip.setLevel(Deflater.NO_COMPRESSION)
                 val buffer = ByteArray(1024 * 1024)
-                REQUIRED_MODEL_FILES.forEach { name ->
+                IMPORT_MODEL_FILES.forEach { name ->
                     val source = modelFile(name)
                     check(source.isFile && source.length() > 0L) { "缺少模型文件：$name" }
                     val digest = MessageDigest.getInstance("SHA-256")
@@ -716,7 +720,7 @@ class CosyVoiceStore(context: Context) {
     }
 
     fun deleteModel() {
-        REQUIRED_MODEL_FILES.forEach { name ->
+        IMPORT_MODEL_FILES.forEach { name ->
             modelFile(name).delete()
             File(modelDir, "$name.download").delete()
             File(modelDir, "$name.importing").delete()

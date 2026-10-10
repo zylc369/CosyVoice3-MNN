@@ -329,7 +329,8 @@ App 可点击“在线安装”断点续传并校验完整 ZIP，也可手动下
 
 ### ZIP 导入机制
 
-1. 读取 ZIP，必需文件名比对 `REQUIRED_MODEL_FILES` 清单
+1. 读取 ZIP，必需文件名比对 `IMPORT_MODEL_FILES`（16 个模型文件 + `llm_config.json`）
+   - `llm_config.json` 是原生 LLM 必需文件，缺失会导致生成空序列
 2. 解压必需文件到 staging 目录
 3. 结构校验：必需文件齐全、非空；若包内含 `manifest.json`，按其中的大小校验
    - 不做逐文件 SHA-256：包内清单与文件同包、可能过时，真正的可信锚是整包哈希
