@@ -246,13 +246,10 @@ internal object CosyVoiceRuntime {
             CosyVoiceHardwarePolicy.current(openClAvailable = false, hexagonAvailable = false)
         )
         val hexagonStatus = CosyVoiceHexagonBootstrap.initialize(context)
-        val hexagonArch =
-            if (hexagonStatus.available) io.legado.app.cosy.CosyVoiceHexagonNative.archVersion() else null
         return CosyVoiceHardwarePolicy.recommend(
             CosyVoiceHardwarePolicy.current(
                 openClAvailable = openClAvailable,
-                hexagonAvailable = hexagonStatus.available,
-                hexagonArch = hexagonArch
+                hexagonAvailable = hexagonStatus.available
             )
         )
     }

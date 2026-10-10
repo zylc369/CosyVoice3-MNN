@@ -10,9 +10,7 @@ internal data class CosyVoiceDeviceCapabilities(
     val model: String,
     val cpuCores: Int,
     val openClAvailable: Boolean,
-    val hexagonAvailable: Boolean,
-    /** 运行期读到的 Hexagon DSP 架构版本（get_hex_arch_ver）；读不到为 null。 */
-    val hexagonArch: Int? = null
+    val hexagonAvailable: Boolean
 )
 
 data class CosyVoiceHardwarePlan(
@@ -44,18 +42,11 @@ data class CosyVoiceHardwarePlan(
 
 internal object CosyVoiceHardwarePolicy {
 
-    // 【2026-10-10】动态启用策略：
-    //   高通 + Hexagon 运行库可加载 → 直接尝试 NPU（q_proj 单算子），
-    //   不再做机型/架构白名单。正确性由运行期质量门 + 失败整句回退 CPU 兜底。
-    //   注：hexagonArch（get_hex_arch_ver 的数值）目前仅用于展示/记录。
-    //
-    //   历史方案是写死 setOf("SM8850")；因无法在未验证机型上拿到参考值，
-    //   按需求改为“动态检查通过即放开”。代价：DSP/skel 不匹配的机型也会尝试 NPU。
+    private val verifiedHexagonSocModels = setOf("SM8850")
 
     fun current(
         openClAvailable: Boolean,
-        hexagonAvailable: Boolean,
-        hexagonArch: Int? = null
+        hexagonAvailable: Boolean
     ): CosyVoiceDeviceCapabilities {
         val socManufacturer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             Build.SOC_MANUFACTURER.orEmpty()
@@ -75,8 +66,7 @@ internal object CosyVoiceHardwarePolicy {
             model = Build.MODEL.orEmpty(),
             cpuCores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1),
             openClAvailable = openClAvailable,
-            hexagonAvailable = hexagonAvailable,
-            hexagonArch = hexagonArch
+            hexagonAvailable = hexagonAvailable
         )
     }
 
@@ -96,21 +86,22 @@ internal object CosyVoiceHardwarePolicy {
             capabilities.cpuCores >= 4 -> 3
             else -> 2
         }
+        val verifiedSoc = capabilities.socModel.uppercase() in verifiedHexagonSocModels
         val llmBackend =
-            if (isQualcomm && capabilities.hexagonAvailable) "hexagon" else "cpu"
+            if (verifiedSoc && capabilities.hexagonAvailable) "hexagon" else "cpu"
         val flowBackend = if (capabilities.openClAvailable) "opencl" else "cpu"
         val decision = when {
-            llmBackend == "hexagon" -> "高通 Hexagon 动态启用"
-            capabilities.hexagonAvailable -> "Hexagon 运行库可用"
-            isQualcomm -> "高通兼容模式，Hexagon 不可用"
+            llmBackend == "hexagon" -> "SM8850 已验证自动加速"
+            verifiedSoc -> "SM8850 NPU 运行库不可用，自动回退"
+            isQualcomm -> "高通兼容模式，NPU 尚未验证"
             capabilities.openClAvailable -> "跨厂商 GPU 兼容模式"
             else -> "CPU 兼容模式"
         }
         val npuStatus = when {
             llmBackend == "hexagon" ->
-                "Hexagon 仅执行第 0 层 q_proj；输出异常整句回退 CPU" +
-                    (capabilities.hexagonArch?.let { "（arch=$it）" } ?: "")
-            capabilities.hexagonAvailable -> "Hexagon 运行库可用，但未启用"
+                "Hexagon 仅执行第 0 层 q_proj；其余 LLM 算子使用 CPU"
+            capabilities.hexagonAvailable ->
+                "Hexagon 运行库可用，但当前 SoC 未通过音频正确性验证"
             isQualcomm -> "Hexagon Stub/Skeleton 初始化失败"
             else -> "非高通设备不启用 Hexagon"
         }
