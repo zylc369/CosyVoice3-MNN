@@ -38,6 +38,8 @@ class CosyVoiceModelDownloader(
             "b1c74dfc90972d82d8166813620a882fe37a0dc02964e19c4f33daafefeb1c84"
         private const val MODEL_URL =
             "https://huggingface.co/VicenTrent/Cosy-Voice-MNN/resolve/main/$MODEL_ZIP?download=true"
+        // 解包后 16 个模型文件的字节总量（用于在线安装前的空间预估）。
+        private const val INSTALLED_MODEL_BYTES = 1_399_078_128L
         private const val EXTRA_FREE_BYTES = 512L * 1024L * 1024L
     }
 
@@ -54,14 +56,13 @@ class CosyVoiceModelDownloader(
         onProgress: (CosyVoiceModelDownloadProgress) -> Unit,
         onStage: (String) -> Unit = {}
     ) {
-        val expectedModels = CosyVoiceStore.MODEL_FILE_SPECS.sumOf { it.bytes }
-        val largestModel = CosyVoiceStore.MODEL_FILE_SPECS.maxOf { it.bytes }
+        val expectedModels = INSTALLED_MODEL_BYTES
         val downloadDir = File(appContext.filesDir, "cosyvoice3-mnn/downloads").apply {
             check(mkdirs() || isDirectory) { "无法创建模型下载目录" }
         }
         val part = File(downloadDir, "$MODEL_ZIP.download")
         val archive = File(downloadDir, MODEL_ZIP)
-        val required = MODEL_ZIP_BYTES + expectedModels + largestModel + EXTRA_FREE_BYTES
+        val required = MODEL_ZIP_BYTES + expectedModels + EXTRA_FREE_BYTES
         val available = StatFs(appContext.filesDir.absolutePath).availableBytes
         check(store.modelStatus().ready || available >= required) {
             "在线安装至少需要 ${formatBytes(required)} 可用空间，当前 ${formatBytes(available)}"
@@ -71,7 +72,10 @@ class CosyVoiceModelDownloader(
             onStage("正在从 Hugging Face 下载模型")
             downloadArchive(part, onProgress)
             onStage("正在校验模型包 SHA-256")
-            check(part.sha256() == MODEL_ZIP_SHA256) { "模型包 SHA-256 校验失败" }
+            check(part.sha256() == MODEL_ZIP_SHA256) {
+                part.delete()
+                "模型包 SHA-256 校验失败，请重新下载"
+            }
             archive.delete()
             check(part.renameTo(archive)) { "模型包无法保存" }
         } else {
@@ -82,7 +86,7 @@ class CosyVoiceModelDownloader(
             }
         }
 
-        onStage("正在安装并逐文件校验模型")
+        onStage("正在安装并校验模型结构")
         archive.inputStream().use { input ->
             store.importModelZip(input, onStage)
         }

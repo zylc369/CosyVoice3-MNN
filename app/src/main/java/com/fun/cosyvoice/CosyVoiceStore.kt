@@ -51,32 +51,43 @@ class CosyVoiceStore(context: Context) {
             setOf("llm_model", "llm_weight", "tokenizer_file", "backend_type")
         private const val PROMPT_PREFIX = SYSTEM_PROMPT_PREFIX + "希望你以后能够做的比我还好呀。"
 
-        val MODEL_FILE_SPECS = listOf(
-            CosyVoiceModelFileSpec("config-cpu-cosyvoice-ras.json", 504L, "448256EFCC585A151DAB804A8C19F5CC0F6EF846DDAA294D406FF6F3FC2DC081"),
-            // 注意：llm_config.json **不在此列**。
-            // 它不是模型权重，而是"运行时配置"：MNN-LLM 的采样默认值是全关
-            // （top_k=-1 / top_p=-1 / repetition_penalty=-1），会让生成长度剧烈波动，
-            // 所以本项目必须在它里面写入官方 CosyVoice 的采样参数。
-            // 把它当模型文件校验大小/hash，会导致"修好采样反而判模型缺失"。
-            // 改由 ensureLlmSamplerConfig() 在运行时合并 —— 见下方。
-            CosyVoiceModelFileSpec("llm.mnn", 419_640L, "939C364630A8B61E7ACFBDBDA65FA4D0DDC973E751CEF6C2EC84A1E3BB918BAD"),
-            CosyVoiceModelFileSpec("llm.mnn.weight", 352_844_666L, "325948C3809FBA1A98C19AA223537D7D984E5DB206BF165A33CC6AEF80470CA3"),
-            CosyVoiceModelFileSpec("embeddings_bf16.bin", 284_426_240L, "FF8FBF42A814A2454AAD569218C0DFB271934D9DD14F237F48DEA08124738BB3"),
-            CosyVoiceModelFileSpec("tokenizer.mtok", 4_042_638L, "90C5707092C11E2C1E34C3325C2E92ED6E8FFFCAFB1170E67A0DCA459CFB8C70"),
-            CosyVoiceModelFileSpec("flow.cfg-student-2step.batch1.fp16.mnn", 1_340_608L, "C70084684EC71908C38FAD043B07534F3BCF1999810353361405A0564F14C1EC"),
-            CosyVoiceModelFileSpec("flow.cfg-student-2step.batch1.fp16.mnn.weight", 663_253_312L, "E8D363544063702A9DA0800F3A2BBBA5669EA719943A5DE15A8B08B0F28D24BC"),
-            CosyVoiceModelFileSpec("flow-conditioner.fp32.mnn", 4_403_404L, "E46A28D7E76BDB1C15703549BA9A8AC9C0E090D7FC2B264AD84D26909B65E6AF"),
-            CosyVoiceModelFileSpec("prompt-speech-tokens.csv", 400L, "58E3AB5495425691F353C094B387FBE65EBD93509DADA0F1F3F30CFFD9D3B6A3"),
-            CosyVoiceModelFileSpec("prompt-cond.bin", 55_680L, "1F7ADD933FA2490FE4F27138C436199495770382AD7CFF29CA9D74815C98FDFC"),
-            CosyVoiceModelFileSpec("spks.bin", 320L, "6FF6DD7D3DF8AB6ECD3DF90721B8451750A89511E09633CA5EA39C01C557B3EA"),
-            CosyVoiceModelFileSpec("rand-noise.bin", 4_800_000L, "656C9256457B71D1621F32D64715E922C656670185E70B457F7734E2C4DA0B95"),
-            CosyVoiceModelFileSpec("hift-f0.fp32.mnn", 13_271_724L, "884604068193AF8D614A75E06FC54FCE44EB0F5DD743E99929FE058D43E6A951"),
-            CosyVoiceModelFileSpec("hift-core.fp32.mnn", 70_218_952L, "6BE4E5CA02DE78348D850A6E1D330C01DA57525387B8BA377749671E6D361C84"),
-            CosyVoiceModelFileSpec("source-linear-weight.bin", 36L, "1C338F6F59212BE433346668821360D112731804FEC960D297620C07C73DA6C2"),
-            CosyVoiceModelFileSpec("source-linear-bias.bin", 4L, "163A4F7DD40651BAF8565B6B338828FACCBFD20AC0ED05173CE6DD45727F9B13")
+        // 模型包必须包含的文件清单。名字是结构契约；不再写死每个文件的大小与 SHA-256，
+        // 避免"改了整包哈希、忘了改逐文件哈希"导致的误报。
+        // 逐文件校验当前只用包内 manifest.json 的**大小**（结构完整性），不做 SHA：
+        // 包内清单与文件同包、可能过时，真正的可信锚是 CosyVoiceModelDownloader 里的整包 SHA-256。
+        //
+        // 注意：llm_config.json **不在此列**。
+        // 它不是模型权重，而是"运行时配置"：MNN-LLM 的采样默认值是全关
+        // （top_k=-1 / top_p=-1 / repetition_penalty=-1），会让生成长度剧烈波动，
+        // 所以本项目必须在它里面写入官方 CosyVoice 的采样参数。
+        // 把它当模型文件校验大小/hash，会导致"修好采样反而判模型缺失"。
+        // 改由 ensureLlmSamplerConfig() 在运行时合并 —— 见下方。
+        val REQUIRED_MODEL_FILES = listOf(
+            "config-cpu-cosyvoice-ras.json",
+            "llm.mnn",
+            "llm.mnn.weight",
+            "embeddings_bf16.bin",
+            "tokenizer.mtok",
+            "flow.cfg-student-2step.batch1.fp16.mnn",
+            "flow.cfg-student-2step.batch1.fp16.mnn.weight",
+            "flow-conditioner.fp32.mnn",
+            "prompt-speech-tokens.csv",
+            "prompt-cond.bin",
+            "spks.bin",
+            "rand-noise.bin",
+            "hift-f0.fp32.mnn",
+            "hift-core.fp32.mnn",
+            "source-linear-weight.bin",
+            "source-linear-bias.bin"
         )
 
-        val REQUIRED_MODEL_FILES = MODEL_FILE_SPECS.map { it.name }
+        // 模型包自述清单：随 ZIP 一起分发/导出，逐文件记载大小与 SHA-256。
+        private const val MANIFEST_FILE = "manifest.json"
+        private const val MANIFEST_FORMAT = "cosyvoice3-mnn-mobile-model"
+        // 单个模型文件允许的最大字节数，防止恶意 ZIP 用超大条目耗尽磁盘。
+        private const val MAX_MODEL_FILE_BYTES = 1_500_000_000L
+        // 清单文件最大字节数，防止恶意 ZIP 用超大清单耗尽内存。
+        private const val MAX_MANIFEST_BYTES = 1L * 1024 * 1024
 
         val ENROLLMENT_FILE_SPECS = listOf(
             CosyVoiceModelFileSpec("speech-tokenizer-v3.fp32.inline.mnn", 969_762_652L, "EB436E54A7A4227059F7A61C47DA57EFE2BF1124C89CD24BD2841BBC190A4769"),
@@ -158,13 +169,17 @@ class CosyVoiceStore(context: Context) {
     }
 
     fun modelStatus(): CosyVoiceModelStatus {
-        val missing = MODEL_FILE_SPECS.filter { spec ->
-            val file = modelFile(spec)
-            !file.exists() || file.length() != spec.bytes
-        }.map { it.name }
+        val specsByName = storedModelManifest()?.associateBy { it.name }
+        val missing = REQUIRED_MODEL_FILES.filter { name ->
+            val file = modelFile(name)
+            if (!file.isFile || file.length() == 0L) return@filter true
+            // 有自述清单时按其中的大小严格校验；没有（旧版安装）时退化为"存在且非空"。
+            val spec = specsByName?.get(name) ?: return@filter false
+            file.length() != spec.bytes
+        }
         return CosyVoiceModelStatus(
             ready = missing.isEmpty(),
-            installedBytes = MODEL_FILE_SPECS.sumOf { modelFile(it).length() },
+            installedBytes = REQUIRED_MODEL_FILES.sumOf { modelFile(it).length() },
             missingFiles = missing
         )
     }
@@ -488,65 +503,119 @@ class CosyVoiceStore(context: Context) {
         } ?: error("无法读取模型包")
     }
 
+    /**
+     * 统一导入模型 ZIP：在线下载与本地导入走同一套逻辑。
+     *
+     * 校验分两层：
+     *  1. 结构：必须覆盖 [REQUIRED_MODEL_FILES]，非空；若包内有 manifest.json，
+     *     则要求它列出全部必需文件且大小一致（防截断/错包）。
+     *  2. 整包（在线）：[CosyVoiceModelDownloader] 先按写死的整包 SHA-256 校验，
+     *     作为防重打包的外层锚，然后才调用本函数。
+     *
+     * ⚠️ 这里**刻意不做逐文件 SHA-256 校验**。原因：包内 manifest 与文件同包，
+     * 且现实中出现过"热替换某个文件但没重新生成清单"的包（清单日期早于文件日期），
+     * 于是清单里的哈希本身就是错的，拿它校验必然误报。真正可信的锚只能是整包哈希。
+     * 本地导入没有整包锚，因此只做结构与大小校验，属于完整性问题而非可信问题。
+     */
     fun importModelZip(input: InputStream, onProgress: (String) -> Unit = {}) {
         val staging = File(root, "model-staging-${System.currentTimeMillis()}").apply { mkdirs() }
-        val accepted = mutableSetOf<String>()
+        val required = REQUIRED_MODEL_FILES.toSet()
         try {
+            var manifestBytes: ByteArray? = null
             ZipInputStream(input.buffered()).use { zip ->
                 while (true) {
                     val entry = zip.nextEntry ?: break
                     if (entry.isDirectory) continue
                     val name = File(entry.name.replace('\\', '/')).name
-                    val spec = MODEL_FILE_SPECS.firstOrNull { it.name == name } ?: continue
+                    if (name == MANIFEST_FILE) {
+                        manifestBytes = readManifest(zip)
+                        continue
+                    }
+                    if (name !in required) continue
                     onProgress("正在导入 $name")
                     val target = File(staging, name)
-                    FileOutputStream(target).buffered().use { output ->
-                        zip.copyTo(output, 1024 * 1024)
-                    }
-                    verifyModelFile(target, spec, checkHash = true)
-                    accepted += name
+                    copyZipEntry(zip, target, MAX_MODEL_FILE_BYTES)
                 }
             }
-            val missing = REQUIRED_MODEL_FILES - accepted
+            val missing = REQUIRED_MODEL_FILES.filter { name ->
+                val staged = File(staging, name)
+                !staged.isFile || staged.length() == 0L
+            }
             check(missing.isEmpty()) { "模型包缺少：${missing.joinToString()}" }
-            MODEL_FILE_SPECS.forEach { spec ->
-                val source = File(staging, spec.name)
-                val temp = File(modelDir, "${spec.name}.importing")
+            manifestBytes?.let { bytes ->
+                val specs = parseModelManifest(bytes).associateBy { it.name }
+                val notListed = REQUIRED_MODEL_FILES.filterNot { it in specs }
+                check(notListed.isEmpty()) { "模型清单缺少：${notListed.joinToString()}" }
+                REQUIRED_MODEL_FILES.forEach { name ->
+                    val spec = specs.getValue(name)
+                    val staged = File(staging, name)
+                    check(staged.length() == spec.bytes) {
+                        "$name 大小不正确：${staged.length()} / ${spec.bytes}"
+                    }
+                }
+            }
+            REQUIRED_MODEL_FILES.forEach { name ->
+                val source = File(staging, name)
+                val temp = File(modelDir, "$name.importing")
                 source.copyTo(temp, overwrite = true)
-                verifyModelFile(temp, spec, checkHash = false)
-                modelFile(spec).delete()
-                check(temp.renameTo(modelFile(spec))) { "${spec.name} 无法保存" }
+                modelFile(name).delete()
+                check(temp.renameTo(modelFile(name))) { "$name 无法保存" }
+            }
+            if (manifestBytes != null) {
+                File(modelDir, MANIFEST_FILE).writeBytes(manifestBytes)
+            } else {
+                File(modelDir, MANIFEST_FILE).delete()
             }
             Log.i(TAG, "model import done bytes=${modelStatus().installedBytes}")
-        } finally { staging.deleteRecursively() }
+        } finally {
+            staging.deleteRecursively()
+        }
     }
 
     fun exportModelZip(uri: Uri, onProgress: (String) -> Unit = {}) {
         check(modelStatus().ready) { "MNN 模型不完整，无法导出" }
         val output = appContext.contentResolver.openOutputStream(uri, "w") ?: error("无法创建模型包")
         var exportedBytes = 0L
-        val totalBytes = MODEL_FILE_SPECS.sumOf { it.bytes }
+        val totalBytes = REQUIRED_MODEL_FILES.sumOf { modelFile(it).length() }
         var lastProgress = -1L
+        val specs = mutableListOf<CosyVoiceModelFileSpec>()
         try {
             ZipOutputStream(output.buffered(1024 * 1024)).use { zip ->
                 zip.setLevel(Deflater.NO_COMPRESSION)
                 val buffer = ByteArray(1024 * 1024)
-                MODEL_FILE_SPECS.forEach { spec ->
-                    val source = modelFile(spec)
-                    verifyModelFile(source, spec, checkHash = false)
-                    zip.putNextEntry(ZipEntry(spec.name))
+                REQUIRED_MODEL_FILES.forEach { name ->
+                    val source = modelFile(name)
+                    check(source.isFile && source.length() > 0L) { "缺少模型文件：$name" }
+                    val digest = MessageDigest.getInstance("SHA-256")
+                    zip.putNextEntry(ZipEntry(name))
                     source.inputStream().buffered(1024 * 1024).use { input ->
                         while (true) {
                             val count = input.read(buffer)
                             if (count < 0) break
+                            digest.update(buffer, 0, count)
                             zip.write(buffer, 0, count)
                             exportedBytes += count
                             val progress = exportedBytes * 100L / totalBytes
-                            if (progress != lastProgress) { lastProgress = progress; onProgress("正在导出 ${spec.name} · $progress%") }
+                            if (progress != lastProgress) { lastProgress = progress; onProgress("正在导出 $name · $progress%") }
                         }
                     }
                     zip.closeEntry()
+                    specs += CosyVoiceModelFileSpec(name, source.length(), digest.digest().joinToString("") { "%02X".format(it) })
                 }
+                // 与建包脚本一致：清单最后写入，重新导入时用它的名字/大小做结构校验。
+                onProgress("正在写入模型清单")
+                val manifest = JSONObject()
+                    .put("format", MANIFEST_FORMAT)
+                    .put("formatVersion", 1)
+                    .put("sampleRate", SAMPLE_RATE)
+                    .put("files", JSONArray().apply {
+                        specs.forEach { spec ->
+                            put(JSONObject().put("name", spec.name).put("bytes", spec.bytes).put("sha256", spec.sha256))
+                        }
+                    })
+                zip.putNextEntry(ZipEntry(MANIFEST_FILE))
+                zip.write(manifest.toString(2).toByteArray(Charsets.UTF_8))
+                zip.closeEntry()
             }
             Log.i(TAG, "model export done bytes=$exportedBytes")
         } catch (error: Throwable) {
@@ -566,7 +635,7 @@ class CosyVoiceStore(context: Context) {
         // 【2026-09-18】注入 chunk / chunk_limits。
         //
         // 为什么必须在这里注入，而不是直接改源 config：
-        //   config-cpu-cosyvoice-ras.json 在 MODEL_FILE_SPECS 里被当作【模型文件】做校验，
+        //   config-cpu-cosyvoice-ras.json 在 REQUIRED_MODEL_FILES 里被当作【模型文件】做校验，
         //   改它会让 modelStatus().ready 变 false（实测报「朗读模型未就绪」）。
         //   与 ADR-054 lesson ㉞ 同一类错误：可调参数不能混进被校验的模型清单。
         //
@@ -647,9 +716,13 @@ class CosyVoiceStore(context: Context) {
     }
 
     fun deleteModel() {
-        MODEL_FILE_SPECS.forEach { spec ->
-            modelFile(spec).delete(); modelPartFile(spec).delete(); modelVerifiedFile(spec).delete()
+        REQUIRED_MODEL_FILES.forEach { name ->
+            modelFile(name).delete()
+            File(modelDir, "$name.download").delete()
+            File(modelDir, "$name.importing").delete()
+            File(modelDir, "$name.verified").delete()
         }
+        File(modelDir, MANIFEST_FILE).delete()
         File(modelDir, "config-cpu-cosyvoice-ras-runtime.json").delete()
         File(modelDir, "config-hexagon-cosyvoice-ras-runtime.json").delete()
         gpuCacheDir.listFiles()?.forEach(File::delete)
@@ -756,13 +829,45 @@ class CosyVoiceStore(context: Context) {
         }
     }
 
-    fun modelFile(spec: CosyVoiceModelFileSpec): File = File(modelDir, spec.name)
+    private fun readManifest(zip: ZipInputStream): ByteArray {
+        val output = java.io.ByteArrayOutputStream()
+        val buffer = ByteArray(64 * 1024)
+        var total = 0L
+        while (true) {
+            val count = zip.read(buffer)
+            if (count < 0) break
+            total += count
+            check(total <= MAX_MANIFEST_BYTES) { "${MANIFEST_FILE} 超过允许大小" }
+            output.write(buffer, 0, count)
+        }
+        return output.toByteArray()
+    }
+
     fun modelFile(name: String): File = File(modelDir, name)
     fun enrollmentFile(name: String): File = File(enrollmentDir, name)
-    fun modelPartFile(spec: CosyVoiceModelFileSpec): File = File(modelDir, "${spec.name}.download")
-    fun modelVerifiedFile(spec: CosyVoiceModelFileSpec): File = File(modelDir, "${spec.name}.verified")
 
-    fun verifyModelFile(file: File, spec: CosyVoiceModelFileSpec, checkHash: Boolean) = verifyFile(file, spec, checkHash)
+    /** 读取安装时保存的模型自述清单；缺失（旧版安装）返回 null。 */
+    private fun storedModelManifest(): List<CosyVoiceModelFileSpec>? {
+        val file = File(modelDir, MANIFEST_FILE)
+        if (!file.isFile) return null
+        return runCatching { parseModelManifest(file.readBytes()) }.getOrNull()
+    }
+
+    private fun parseModelManifest(bytes: ByteArray): List<CosyVoiceModelFileSpec> {
+        val json = JSONObject(String(bytes, Charsets.UTF_8))
+        json.optString("format").takeIf { it.isNotEmpty() }?.let { format ->
+            check(format == MANIFEST_FORMAT) { "模型清单格式不支持：$format" }
+        }
+        val files = json.optJSONArray("files") ?: error("模型清单格式不正确")
+        return (0 until files.length()).map { index ->
+            val file = files.getJSONObject(index)
+            CosyVoiceModelFileSpec(
+                name = file.getString("name"),
+                bytes = file.getLong("bytes"),
+                sha256 = file.optString("sha256", "")
+            )
+        }
+    }
 
     private fun verifyFile(file: File, spec: CosyVoiceModelFileSpec, checkHash: Boolean) {
         check(file.exists() && file.length() == spec.bytes) {

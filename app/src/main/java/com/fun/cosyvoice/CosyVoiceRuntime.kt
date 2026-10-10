@@ -262,7 +262,7 @@ internal object CosyVoiceRuntime {
         onStage: suspend (String) -> Unit = {}
     ): CosyVoiceSynthesisReport = mutex.withLock {
         check(store.modelStatus().ready) { "MNN 模型不完整" }
-        // 采样参数是运行时配置（不在 MODEL_FILE_SPECS 里）：MNN-LLM 的默认值是全关，
+        // 采样参数是运行时配置（不在 REQUIRED_MODEL_FILES 里）：MNN-LLM 的默认值是全关，
         // 会导致生成长度剧烈波动（同一句话实测 3.04/10.48/20.00 秒）。幂等，已合并则直接返回。
         store.ensureLlmSamplerConfig()
         val cleanText = text.replace(Regex("[\\r\\n]+"), " ").trim()
